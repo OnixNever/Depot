@@ -63,12 +63,12 @@ jobs:
           KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
         run: |
           mkdir -p ~/.android
-          if [ -n "$KEYSTORE_B64" ]; then
+          if [ -f debug.keystore ]; then
+            cp debug.keystore ~/.android/debug.keystore
+            echo "Clé restaurée depuis debug.keystore (envoyée par APK Builder)"
+          elif [ -n "$KEYSTORE_B64" ]; then
             echo "$KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
             echo "Clé restaurée depuis le secret DEBUG_KEYSTORE_BASE64"
-          elif [ -f debug.keystore ]; then
-            cp debug.keystore ~/.android/debug.keystore
-            echo "Clé restaurée depuis debug.keystore (dépôt)"
           else
             echo "::warning::Aucune clé stable trouvée : une nouvelle clé sera générée, l'APK ne pourra pas se mettre à jour par-dessus l'ancien."
           fi
