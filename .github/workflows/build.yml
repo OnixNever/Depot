@@ -73,6 +73,37 @@ jobs:
             echo "::warning::Aucune clé stable trouvée : une nouvelle clé sera générée, l'APK ne pourra pas se mettre à jour par-dessus l'ancien."
           fi
 
+      - name: Forcer la signature stable
+        run: |
+          KS="$HOME/.android/debug.keystore"
+          [ -f "$KS" ] || { echo "::error::Cle absente : $KS"; exit 1; }
+          # Copie dans tous les emplacements ou Gradle / le plugin Android peuvent la chercher
+          for D in "${ANDROID_USER_HOME:-}" "${ANDROID_SDK_HOME:-}/.android" "$HOME/.android"; do
+            [ -n "$D" ] && [ "$D" != "/.android" ] || continue
+            mkdir -p "$D" && cp -f "$KS" "$D/debug.keystore" 2>/dev/null || true
+          done
+          mkdir -p "$HOME/.gradle/init.d"
+          cat > "$HOME/.gradle/init.d/apkbuilder-signing.gradle" <<'GRADLE_EOF'
+          allprojects {
+            afterEvaluate { p ->
+              if (p.plugins.hasPlugin("com.android.application")) {
+                def ks = new File(System.getenv("HOME"), ".android/debug.keystore")
+                p.android.signingConfigs.debug {
+                  storeFile ks
+                  storePassword "android"
+                  keyAlias "androiddebugkey"
+                  keyPassword "android"
+                }
+                p.android.buildTypes.all { bt ->
+                  if (bt.name == "debug" || bt.name == "release") { bt.signingConfig = p.android.signingConfigs.debug }
+                }
+                println "APK Builder : signature forcee avec " + ks
+              }
+            }
+          }
+          GRADLE_EOF
+          echo "Script de signature Gradle installe"
+
       - name: Numero de version automatique
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
