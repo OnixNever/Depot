@@ -107,6 +107,30 @@ jobs:
           done
           exit 1
 
+      - name: Verifier signature et version de l APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          EXPECTED="5270b4cdd7c31b1d3e05c78bd4ebcbfb4ddea828d441a2221fed30edf74056c4"
+          APK=$(find . -name '*.apk' -path '*/build/*' | head -1)
+          if [ -z "$APK" ]; then echo "::warning::Aucun APK trouve pour la verification"; exit 0; fi
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          BT=$(ls -d "$SDK"/build-tools/* 2>/dev/null | sort -V | tail -1 || true)
+          echo "APK verifie : $APK"
+          if [ -z "$BT" ] || [ ! -x "$BT/apksigner" ]; then
+            echo "::warning::apksigner introuvable, verification impossible"
+            exit 0
+          fi
+          if [ -x "$BT/aapt2" ]; then
+            "$BT/aapt2" dump badging "$APK" 2>/dev/null | grep -m1 '^package:' || true
+          fi
+          GOT=$("$BT/apksigner" verify --print-certs "$APK" 2>/dev/null | grep -m1 'certificate SHA-256 digest' | awk '{print $NF}' || true)
+          echo "Signature SHA-256 de l'APK : $GOT"
+          if [ "$GOT" = "$EXPECTED" ]; then
+            echo "Signature OK : cle stable APK Builder"
+          else
+            echo "::warning::Signature differente de la cle stable : cet APK ne se mettra pas a jour par-dessus un APK signe avec la cle stable"
+          fi
+
       - name: Récupérer l'APK
         run: |
           mkdir -p sortie
