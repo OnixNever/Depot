@@ -57,6 +57,9 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+          # Cache désactivé : un cache corrompu ("jar introuvable") était restauré à chaque
+          # lancement et faisait échouer tous les essais. Compilation un peu plus longue mais fiable.
+          cache-disabled: true
 
       - name: Clé de signature stable
         env:
@@ -104,6 +107,46 @@ jobs:
           GRADLE_EOF
           echo "Script de signature Gradle installe"
 
+      - name: Filets de sécurité réseau (miroirs Maven + test)
+        run: |
+          mkdir -p "$HOME/.gradle/init.d"
+          cat > "$HOME/.gradle/init.d/apkbuilder-repos.gradle" <<'GRADLE_EOF'
+          // APK Builder : depots de secours, utilises seulement si Maven Central ne trouve pas un fichier
+          def apkMirrors = [
+            "https://repo1.maven.org/maven2/",
+            "https://maven-central.storage-download.googleapis.com/maven2/"
+          ]
+          settingsEvaluated { settings ->
+            try {
+              settings.pluginManagement.repositories {
+                apkMirrors.each { u -> maven { url u } }
+              }
+            } catch (Throwable t) { println "APK Builder : miroirs plugins ignores : " + t.message }
+            try {
+              settings.dependencyResolutionManagement.repositories {
+                apkMirrors.each { u -> maven { url u } }
+              }
+            } catch (Throwable t) { println "APK Builder : miroirs dependances ignores : " + t.message }
+          }
+          allprojects { p ->
+            try {
+              p.buildscript.repositories {
+                apkMirrors.each { u -> maven { url u } }
+              }
+            } catch (Throwable t) { println "APK Builder : miroirs buildscript ignores : " + t.message }
+          }
+          GRADLE_EOF
+          echo "Miroirs de secours installes"
+          # Test de connexion : visible dans le journal pour comprendre un échec futur
+          for U in \
+            "https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/1.9.23/kotlin-stdlib-1.9.23.jar" \
+            "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/1.9.23/kotlin-stdlib-1.9.23.jar" \
+            "https://maven-central.storage-download.googleapis.com/maven2/org/jetbrains/kotlin/kotlin-stdlib/1.9.23/kotlin-stdlib-1.9.23.jar" \
+            "https://dl.google.com/dl/android/maven2/com/android/tools/build/gradle/8.5.2/gradle-8.5.2.pom"; do
+            CODE=$(curl -s -o /dev/null -I -m 25 -w '%{http_code}' "$U" || true)
+            echo "Test réseau : HTTP ${CODE:-erreur} <- $U"
+          done
+
       - name: Numero de version automatique
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
@@ -130,11 +173,19 @@ jobs:
           else
             CMD="gradle"
           fi
-          # 3 essais : une panne réseau passagère (504) ne fait plus échouer la compilation
-          for i in 1 2 3; do
-            "$CMD" assembleDebug --no-daemon --stacktrace && exit 0
-            echo "::warning::Tentative $i échouée, nouvel essai dans 30 s"
-            sleep 30
+          GOPTS="--no-daemon --stacktrace -Dorg.gradle.internal.http.connectionTimeout=60000 -Dorg.gradle.internal.http.socketTimeout=120000 -Dorg.gradle.internal.repository.max.retries=5 -Dorg.gradle.internal.repository.initial.backoff=2000"
+          # 4 essais. Avant chaque nouvel essai on vide le cache des dépendances : Gradle mémorise
+          # les "fichier introuvable" et sinon les essais suivants échouent en 4 s sans rien retélécharger.
+          for i in 1 2 3 4; do
+            EXTRA=""
+            if [ "$i" -gt 1 ]; then
+              echo "Nettoyage du cache des dépendances avant l'essai $i"
+              rm -rf "$HOME/.gradle/caches/modules-2"
+              EXTRA="--refresh-dependencies"
+            fi
+            "$CMD" assembleDebug $GOPTS $EXTRA && exit 0
+            echo "::warning::Tentative $i échouée"
+            [ "$i" -lt 4 ] && sleep $((i * 30))
           done
           exit 1
 
